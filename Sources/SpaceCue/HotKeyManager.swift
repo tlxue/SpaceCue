@@ -54,7 +54,7 @@ final class HotKeyManager {
 
             var ref: EventHotKeyRef?
             let hotKeyID = EventHotKeyID(signature: signature, id: UInt32(ordinal))
-            let modifiers = UInt32(controlKey)
+            let modifiers = UInt32(cmdKey)
             let status = RegisterEventHotKey(
                 UInt32(keyCode),
                 modifiers,

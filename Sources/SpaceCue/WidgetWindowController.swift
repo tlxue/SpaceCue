@@ -342,8 +342,8 @@ private final class SpaceButton: NSButton {
     let space: SpaceInfo
     private let glassBackgroundView = LiquidGlassBackgroundView()
     private let contentStack = PassthroughStackView()
-    private let numberLabel = ButtonLabel()
     private let nameLabel = ButtonLabel()
+    private let shortcutLabel = ButtonLabel()
     private var trackingAnchorInWindow: NSPoint?
     private var trackingStartMouse: NSPoint?
     private var didDragWindow = false
@@ -352,7 +352,7 @@ private final class SpaceButton: NSButton {
         self.space = space
         super.init(frame: .zero)
         title = ""
-        toolTip = "Switch to \(space.label): ⌃\(space.ordinal)"
+        toolTip = "Switch to \(space.label): ⌘ \(space.ordinal)"
         setButtonType(.momentaryChange)
         isBordered = false
         bezelStyle = .regularSquare
@@ -462,50 +462,84 @@ private final class SpaceButton: NSButton {
         let textColor = textColor(for: space)
         let font = NSFont.systemFont(ofSize: 14, weight: space.isCurrent ? .semibold : .medium)
 
-        numberLabel.stringValue = "\(space.ordinal)"
-        numberLabel.font = font
-        numberLabel.textColor = textColor
-        numberLabel.setContentHuggingPriority(.required, for: .horizontal)
-        numberLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
-
         nameLabel.stringValue = space.label
         nameLabel.font = font
         nameLabel.textColor = textColor
         nameLabel.lineBreakMode = .byTruncatingTail
         nameLabel.cell?.truncatesLastVisibleLine = true
+        nameLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
         nameLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+
+        shortcutLabel.stringValue = "⌘ \(space.ordinal)"
+        shortcutLabel.font = NSFont.systemFont(ofSize: 9.5, weight: .medium)
+        shortcutLabel.textColor = shortcutTextColor(for: space)
+        shortcutLabel.alignment = .right
+        shortcutLabel.translatesAutoresizingMaskIntoConstraints = false
+        shortcutLabel.setContentHuggingPriority(.required, for: .horizontal)
+        shortcutLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
 
         contentStack.orientation = .horizontal
         contentStack.alignment = .centerY
+        contentStack.distribution = .fill
         contentStack.spacing = 8
         contentStack.translatesAutoresizingMaskIntoConstraints = false
         addSubview(contentStack)
 
-        contentStack.addArrangedSubview(numberLabel)
-
-        if let icon = AppIconResolver.icon(
-            bundleIdentifier: space.appBundleIdentifier,
-            appName: space.appName,
-            label: space.label
-        ) {
+        if let icon = AppIconResolver.icon(for: space) {
+            let iconBoxSize: CGFloat = 24
+            let iconVisualSize: CGFloat = 22
+            let iconOffsetX: CGFloat = space.type == 0 ? 1 : 0
+            let iconContainer = ButtonIconContainerView(frame: .zero)
             let iconView = ButtonIconView(image: icon)
             iconView.imageScaling = .scaleProportionallyDown
-            iconView.setContentHuggingPriority(.required, for: .horizontal)
-            iconView.setContentCompressionResistancePriority(.required, for: .horizontal)
+            iconView.translatesAutoresizingMaskIntoConstraints = false
+            iconContainer.translatesAutoresizingMaskIntoConstraints = false
+            iconContainer.setContentHuggingPriority(.required, for: .horizontal)
+            iconContainer.setContentCompressionResistancePriority(.required, for: .horizontal)
+            iconContainer.addSubview(iconView)
             NSLayoutConstraint.activate([
-                iconView.widthAnchor.constraint(equalToConstant: 22),
-                iconView.heightAnchor.constraint(equalToConstant: 22)
+                iconContainer.widthAnchor.constraint(equalToConstant: iconBoxSize),
+                iconContainer.heightAnchor.constraint(equalToConstant: iconBoxSize),
+                iconView.widthAnchor.constraint(equalToConstant: iconVisualSize),
+                iconView.heightAnchor.constraint(equalToConstant: iconVisualSize),
+                iconView.centerXAnchor.constraint(equalTo: iconContainer.centerXAnchor, constant: iconOffsetX),
+                iconView.centerYAnchor.constraint(equalTo: iconContainer.centerYAnchor)
             ])
-            contentStack.addArrangedSubview(iconView)
+            contentStack.addArrangedSubview(iconContainer)
         }
 
         contentStack.addArrangedSubview(nameLabel)
+
+        let spacer = ButtonSpacerView(frame: .zero)
+        spacer.translatesAutoresizingMaskIntoConstraints = false
+        spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        spacer.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        contentStack.addArrangedSubview(spacer)
+
+        let shortcutContainer = ButtonShortcutContainerView(frame: .zero)
+        shortcutContainer.translatesAutoresizingMaskIntoConstraints = false
+        shortcutContainer.setContentHuggingPriority(.required, for: .horizontal)
+        shortcutContainer.setContentCompressionResistancePriority(.required, for: .horizontal)
+        shortcutContainer.addSubview(shortcutLabel)
+        NSLayoutConstraint.activate([
+            shortcutContainer.heightAnchor.constraint(equalToConstant: 24),
+            shortcutLabel.leadingAnchor.constraint(equalTo: shortcutContainer.leadingAnchor),
+            shortcutLabel.trailingAnchor.constraint(equalTo: shortcutContainer.trailingAnchor),
+            shortcutLabel.centerYAnchor.constraint(equalTo: shortcutContainer.centerYAnchor, constant: -1)
+        ])
+        contentStack.addArrangedSubview(shortcutContainer)
 
         NSLayoutConstraint.activate([
             contentStack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 13),
             contentStack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -13),
             contentStack.centerYAnchor.constraint(equalTo: centerYAnchor)
         ])
+    }
+
+    private func shortcutTextColor(for space: SpaceInfo) -> NSColor {
+        space.isCurrent
+            ? NSColor.black.withAlphaComponent(0.5)
+            : NSColor(calibratedWhite: 0.36, alpha: 0.62)
     }
 }
 
@@ -638,6 +672,28 @@ private final class ButtonLabel: NSTextField {
 }
 
 private final class ButtonIconView: NSImageView {
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        nil
+    }
+}
+
+private final class ButtonIconContainerView: NSView {
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        nil
+    }
+}
+
+private final class ButtonShortcutContainerView: NSView {
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        nil
+    }
+}
+
+private final class ButtonSpacerView: NSView {
+    override var intrinsicContentSize: NSSize {
+        NSSize(width: 0, height: 1)
+    }
+
     override func hitTest(_ point: NSPoint) -> NSView? {
         nil
     }

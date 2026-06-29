@@ -26,7 +26,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var managedSwitchBusyUntil = Date.distantPast
     private var queuedManagedSwitch: SpaceInfo?
     private var queuedManagedFlushWorkItem: DispatchWorkItem?
-    private var desktopSummaries: [String: (phrase: String, bundleIdentifier: String?)] = [:]
 
     override init() {
         SpaceCueLog.write("AppDelegate init")
@@ -116,7 +115,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         status.isEnabled = false
         menu.addItem(status)
 
-        let hotkeys = NSMenuItem(title: "Hotkeys: ⌃1 ... ⌃9", action: nil, keyEquivalent: "")
+        let hotkeys = NSMenuItem(title: "Hotkeys: ⌘ 1 ... ⌘ 9", action: nil, keyEquivalent: "")
         hotkeys.isEnabled = false
         menu.addItem(hotkeys)
 
@@ -148,20 +147,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         pendingActiveConfirmations = 0
         lastRenderedActiveKey = activeKey
 
-        if let current = loaded.first(where: { $0.isCurrent }) {
-            if current.type == 0,
-               let context = WorkspaceIntrospector.visibleDesktopContext(excludingBundleID: Bundle.main.bundleIdentifier) {
-                desktopSummaries[current.key] = (context.phrase, context.bundleIdentifier)
-                if let bundleIdentifier = context.bundleIdentifier {
-                    store.learnAppBundleIdentifier(bundleIdentifier, for: current.key)
-                }
-            } else if let context = WorkspaceIntrospector.currentAppContext(excludingBundleID: Bundle.main.bundleIdentifier) {
-                observe(phrase: context.phrase, bundleIdentifier: context.bundleIdentifier ?? current.appBundleIdentifier, for: current)
-            }
+        if let current = loaded.first(where: { $0.isCurrent }),
+           current.type != 0,
+           let context = WorkspaceIntrospector.currentAppContext(excludingBundleID: Bundle.main.bundleIdentifier) {
+            observe(phrase: context.phrase, bundleIdentifier: context.bundleIdentifier ?? current.appBundleIdentifier, for: current)
         }
 
         applyLabels(to: &loaded)
         applyAppIconHints(to: &loaded)
+        applyFrontmostAppActivationOverride(to: &loaded, reason: reason)
 
         guard loaded != spaces else {
             return
@@ -214,29 +208,80 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func applyLabels(to loaded: inout [SpaceInfo]) {
         for index in loaded.indices {
-            loaded[index].label = store.customLabel(for: loaded[index].key)
-                ?? desktopSummaries[loaded[index].key]?.phrase
-                ?? store.label(for: loaded[index].key)
-                ?? loaded[index].defaultLabel
+            if loaded[index].type == 0 {
+                loaded[index].label = store.customLabel(for: loaded[index].key) ?? loaded[index].defaultLabel
+            } else {
+                loaded[index].label = store.customLabel(for: loaded[index].key)
+                    ?? store.label(for: loaded[index].key)
+                    ?? loaded[index].defaultLabel
+            }
         }
     }
 
     private func applyAppIconHints(to loaded: inout [SpaceInfo]) {
         for index in loaded.indices where loaded[index].appBundleIdentifier == nil {
+            guard loaded[index].type != 0 else {
+                continue
+            }
+
             let labelBundleIdentifier = AppIconResolver.bundleIdentifier(forAppName: loaded[index].label)
             let storedBundleIdentifier = store.appBundleIdentifier(for: loaded[index].key)
             let appNameBundleIdentifier = AppIconResolver.bundleIdentifier(forAppName: loaded[index].appName)
 
-            if loaded[index].type == 0 {
-                loaded[index].appBundleIdentifier = labelBundleIdentifier
-                    ?? storedBundleIdentifier
-                    ?? appNameBundleIdentifier
-            } else {
-                loaded[index].appBundleIdentifier = storedBundleIdentifier
-                    ?? appNameBundleIdentifier
-                    ?? labelBundleIdentifier
-            }
+            loaded[index].appBundleIdentifier = storedBundleIdentifier
+                ?? appNameBundleIdentifier
+                ?? labelBundleIdentifier
         }
+    }
+
+    private func applyFrontmostAppActivationOverride(to loaded: inout [SpaceInfo], reason: String) {
+        guard reason.hasPrefix("app-activate:") else {
+            return
+        }
+
+        guard let currentIndex = loaded.firstIndex(where: { $0.isCurrent }),
+              loaded[currentIndex].type == 4,
+              let context = WorkspaceIntrospector.currentAppContext(excludingBundleID: Bundle.main.bundleIdentifier),
+              !space(loaded[currentIndex], matches: context) else {
+            return
+        }
+
+        guard let targetIndex = loaded.indices.first(where: { index in
+            index != currentIndex
+                && loaded[index].type == 4
+                && space(loaded[index], matches: context)
+        }) else {
+            return
+        }
+
+        loaded[currentIndex].isCurrent = false
+        loaded[targetIndex].isCurrent = true
+        SpaceCueLog.write(
+            "active override reason=\(reason) from=\(loaded[currentIndex].ordinal):\(loaded[currentIndex].label) to=\(loaded[targetIndex].ordinal):\(loaded[targetIndex].label) frontmost=\(context.phrase)"
+        )
+    }
+
+    private func space(_ space: SpaceInfo, matches context: WorkspaceAppContext) -> Bool {
+        if let contextBundleIdentifier = context.bundleIdentifier,
+           let spaceBundleIdentifier = space.appBundleIdentifier,
+           contextBundleIdentifier == spaceBundleIdentifier {
+            return true
+        }
+
+        let contextName = normalizedMatchText(context.phrase)
+        let spaceNames = [
+            space.label,
+            space.appName
+        ].compactMap { $0 }.map(normalizedMatchText)
+
+        return spaceNames.contains(contextName)
+    }
+
+    private func normalizedMatchText(_ value: String) -> String {
+        value
+            .replacingOccurrences(of: ".app", with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
     }
 
     private func observe(phrase: String, bundleIdentifier: String?, for space: SpaceInfo) {
@@ -297,6 +342,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             "switch request ordinal=\(target.ordinal) renderedOrdinal=\(requestedSpace.ordinal) type=\(target.type) id64=\(target.id64) managedID=\(target.managedID.map(String.init) ?? "nil") label=\(target.label)"
         )
 
+        if target.type == 0 {
+            switchToDesktop(target)
+            return
+        }
+
         switchToManagedSpace(target, attempt: 1)
     }
 
@@ -321,35 +371,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let currentOrdinal = actualSpaces.first(where: { $0.isCurrent })?.ordinal
             ?? spaces.first(where: { $0.isCurrent })?.ordinal
 
-        if let currentOrdinal, currentOrdinal != actualTarget.ordinal {
-            let delta = actualTarget.ordinal - currentOrdinal
-            let duration: TimeInterval
-            let direction: String
-            if delta < 0 {
-                direction = "left"
-                duration = KeyboardFallback.moveLeft(count: abs(delta))
-            } else {
-                direction = "right"
-                duration = KeyboardFallback.moveRight(count: delta)
-            }
-
-            let delay = duration + 0.25
-            normalDesktopSwitchLockedUntil = Date().addingTimeInterval(delay + 0.35)
-            SpaceCueLog.write(
-                "switch desktop fallback control-\(direction) count=\(abs(delta)) reason=\(reason) current=\(currentOrdinal) target=\(actualTarget.ordinal) renderedTarget=\(space.ordinal)"
-            )
-            scheduleRefresh(after: delay, mode: .immediate, reason: "desktop-fallback-\(direction)")
-            scheduleRefresh(after: delay + 0.7, mode: .immediate, reason: "desktop-fallback-\(direction)-settle")
-            verifyDesktopSwitch(to: actualTarget, after: delay + 0.35, reason: reason, attempt: 1)
+        guard let currentOrdinal else {
+            SpaceCueLog.write("switch desktop blocked; missing current ordinal target=\(actualTarget.ordinal) renderedTarget=\(space.ordinal) reason=\(reason)")
+            refreshSpaces(mode: .immediate, reason: "desktop-missing-current")
             return
         }
 
-        KeyboardFallback.sendDesktopShortcut(actualTarget.ordinal)
-        normalDesktopSwitchLockedUntil = Date().addingTimeInterval(1.0)
-        SpaceCueLog.write("switch desktop fallback control-number ordinal=\(actualTarget.ordinal) renderedTarget=\(space.ordinal) reason=\(reason)")
-        scheduleRefresh(after: 0.8, mode: .immediate, reason: "desktop-control-number")
-        scheduleRefresh(after: 1.4, mode: .immediate, reason: "desktop-control-number-settle")
-        verifyDesktopSwitch(to: actualTarget, after: 0.9, reason: reason, attempt: 2)
+        guard currentOrdinal != actualTarget.ordinal else {
+            SpaceCueLog.write("switch desktop skipped; ordinal already current target=\(actualTarget.ordinal) renderedTarget=\(space.ordinal) reason=\(reason)")
+            refreshSpaces(mode: .immediate, reason: "desktop-ordinal-already-current")
+            return
+        }
+
+        performDesktopDirectionalSwitch(
+            to: actualTarget,
+            currentOrdinal: currentOrdinal,
+            renderedTargetOrdinal: space.ordinal,
+            reason: reason,
+            attempt: 1
+        )
     }
 
     private func verifyDesktopSwitch(to target: SpaceInfo, after delay: TimeInterval, reason: String, attempt: Int) {
@@ -375,11 +415,48 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
-        KeyboardFallback.sendDesktopShortcut(retryTarget.ordinal)
-        normalDesktopSwitchLockedUntil = Date().addingTimeInterval(1.0)
-        SpaceCueLog.write("switch desktop retry control-number ordinal=\(retryTarget.ordinal) renderedTarget=\(target.ordinal) reason=\(reason)")
-        scheduleRefresh(after: 0.8, mode: .immediate, reason: "desktop-control-number-retry")
-        verifyDesktopSwitch(to: retryTarget, after: 0.9, reason: "\(reason)-control-number-retry", attempt: 2)
+        guard let currentOrdinal = current?.ordinal,
+              currentOrdinal != retryTarget.ordinal else {
+            SpaceCueLog.write("switch desktop retry skipped; missing-or-same-current target=\(retryTarget.ordinal) current=\(current?.ordinal.description ?? "nil") reason=\(reason)")
+            refreshSpaces(mode: .immediate, reason: "desktop-retry-skipped")
+            return
+        }
+
+        performDesktopDirectionalSwitch(
+            to: retryTarget,
+            currentOrdinal: currentOrdinal,
+            renderedTargetOrdinal: target.ordinal,
+            reason: "\(reason)-retry",
+            attempt: 2
+        )
+    }
+
+    private func performDesktopDirectionalSwitch(
+        to target: SpaceInfo,
+        currentOrdinal: Int,
+        renderedTargetOrdinal: Int,
+        reason: String,
+        attempt: Int
+    ) {
+        let delta = target.ordinal - currentOrdinal
+        let duration: TimeInterval
+        let direction: String
+        if delta < 0 {
+            direction = "left"
+            duration = KeyboardFallback.moveLeft(count: abs(delta))
+        } else {
+            direction = "right"
+            duration = KeyboardFallback.moveRight(count: delta)
+        }
+
+        let delay = duration + 0.25
+        normalDesktopSwitchLockedUntil = Date().addingTimeInterval(delay + 0.35)
+        SpaceCueLog.write(
+            "switch desktop fallback control-\(direction) count=\(abs(delta)) reason=\(reason) current=\(currentOrdinal) target=\(target.ordinal) renderedTarget=\(renderedTargetOrdinal) attempt=\(attempt)"
+        )
+        scheduleRefresh(after: delay, mode: .immediate, reason: "desktop-fallback-\(direction)")
+        scheduleRefresh(after: delay + 0.7, mode: .immediate, reason: "desktop-fallback-\(direction)-settle")
+        verifyDesktopSwitch(to: target, after: delay + 0.35, reason: reason, attempt: attempt)
     }
 
     private func switchToManagedSpace(_ space: SpaceInfo, attempt: Int) {

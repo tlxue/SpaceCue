@@ -47,7 +47,7 @@ open -n -F "$HOME/Applications/SpaceCue.app"
 
 ## Controls
 
-- `Control + 1...9`: switch to the matching Space.
+- `Command + 1...9`: switch to the matching Space.
 - Click a pill: switch to that Space.
 - Right-click a pill: rename or clear its label.
 - Drag the background of the floating strip to reposition it.

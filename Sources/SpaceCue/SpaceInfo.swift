@@ -9,7 +9,7 @@ struct SpaceInfo: Equatable {
     let id64: UInt64
     let managedID: UInt64?
     let type: Int
-    let isCurrent: Bool
+    var isCurrent: Bool
     var appBundleIdentifier: String?
     var appName: String?
     var label: String
@@ -19,7 +19,7 @@ struct SpaceInfo: Equatable {
         case 4:
             return "Full screen \(ordinal)"
         default:
-            return "Desktop \(ordinal)"
+            return "Desktop"
         }
     }
 }

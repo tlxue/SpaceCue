@@ -1,6 +1,18 @@
 import AppKit
 
 enum AppIconResolver {
+    static func icon(for space: SpaceInfo) -> NSImage? {
+        if space.type == 0 {
+            return desktopIcon()
+        }
+
+        return icon(
+            bundleIdentifier: space.appBundleIdentifier,
+            appName: space.appName,
+            label: space.label
+        )
+    }
+
     static func icon(bundleIdentifier: String?, appName: String?, label: String) -> NSImage? {
         if let bundleIdentifier,
            let icon = icon(forBundleIdentifier: bundleIdentifier) {
@@ -35,6 +47,17 @@ enum AppIconResolver {
         let image = NSWorkspace.shared.icon(forFile: url.path)
         image.size = NSSize(width: 22, height: 22)
         image.isTemplate = false
+        return image
+    }
+
+    private static func desktopIcon() -> NSImage? {
+        let configuration = NSImage.SymbolConfiguration(pointSize: 22, weight: .regular)
+        let image = NSImage(
+            systemSymbolName: "desktopcomputer",
+            accessibilityDescription: "Desktop"
+        )?.withSymbolConfiguration(configuration)
+        image?.size = NSSize(width: 22, height: 22)
+        image?.isTemplate = true
         return image
     }
 
