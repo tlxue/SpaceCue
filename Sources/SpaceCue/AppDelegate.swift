@@ -26,6 +26,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var managedSwitchBusyUntil = Date.distantPast
     private var queuedManagedSwitch: SpaceInfo?
     private var queuedManagedFlushWorkItem: DispatchWorkItem?
+    private var frontmostSpaceOverrideKey: String?
 
     override init() {
         SpaceCueLog.write("AppDelegate init")
@@ -137,25 +138,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func refreshSpaces(mode: RefreshMode = .immediate, reason: String = "manual") {
         var loaded = normalizeCurrentSpaceOrder(provider.loadSpaces())
-        let activeKey = loaded.first(where: { $0.isCurrent })?.key
+        let rawActiveKey = loaded.first(where: { $0.isCurrent })?.key
 
-        if mode == .stabilized, shouldDeferRender(activeKey: activeKey, reason: reason) {
+        if mode == .stabilized, shouldDeferRender(activeKey: rawActiveKey, reason: reason) {
             return
-        }
-
-        pendingActiveKey = nil
-        pendingActiveConfirmations = 0
-        lastRenderedActiveKey = activeKey
-
-        if let current = loaded.first(where: { $0.isCurrent }),
-           current.type != 0,
-           let context = WorkspaceIntrospector.currentAppContext(excludingBundleID: Bundle.main.bundleIdentifier) {
-            observe(phrase: context.phrase, bundleIdentifier: context.bundleIdentifier ?? current.appBundleIdentifier, for: current)
         }
 
         applyLabels(to: &loaded)
         applyAppIconHints(to: &loaded)
-        applyFrontmostAppActivationOverride(to: &loaded, reason: reason)
+        applyFrontmostAppOverride(to: &loaded, reason: reason)
+
+        if let current = loaded.first(where: { $0.isCurrent }),
+           current.type != 0,
+           let context = WorkspaceIntrospector.currentAppContext(excludingBundleID: Bundle.main.bundleIdentifier),
+           space(current, matches: context) {
+            observe(phrase: context.phrase, bundleIdentifier: context.bundleIdentifier ?? current.appBundleIdentifier, for: current)
+        }
+
+        pendingActiveKey = nil
+        pendingActiveConfirmations = 0
+        lastRenderedActiveKey = loaded.first(where: { $0.isCurrent })?.key
 
         guard loaded != spaces else {
             return
@@ -234,23 +236,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    private func applyFrontmostAppActivationOverride(to loaded: inout [SpaceInfo], reason: String) {
-        guard reason.hasPrefix("app-activate:") else {
+    private func applyFrontmostAppOverride(to loaded: inout [SpaceInfo], reason: String) {
+        guard let context = WorkspaceIntrospector.currentAppContext(excludingBundleID: Bundle.main.bundleIdentifier) else {
+            frontmostSpaceOverrideKey = nil
+            return
+        }
+
+        if reason.hasPrefix("app-activate:"),
+           let targetIndex = loaded.indices.first(where: { loaded[$0].type == 4 && space(loaded[$0], matches: context) }) {
+            frontmostSpaceOverrideKey = loaded[targetIndex].key
+        }
+
+        guard let overrideKey = frontmostSpaceOverrideKey,
+              let targetIndex = loaded.firstIndex(where: { $0.key == overrideKey && $0.type == 4 }),
+              space(loaded[targetIndex], matches: context) else {
+            frontmostSpaceOverrideKey = nil
             return
         }
 
         guard let currentIndex = loaded.firstIndex(where: { $0.isCurrent }),
-              loaded[currentIndex].type == 4,
-              let context = WorkspaceIntrospector.currentAppContext(excludingBundleID: Bundle.main.bundleIdentifier),
-              !space(loaded[currentIndex], matches: context) else {
-            return
-        }
-
-        guard let targetIndex = loaded.indices.first(where: { index in
-            index != currentIndex
-                && loaded[index].type == 4
-                && space(loaded[index], matches: context)
-        }) else {
+              currentIndex != targetIndex else {
+            frontmostSpaceOverrideKey = nil
             return
         }
 
@@ -323,6 +329,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         var loaded = normalizeCurrentSpaceOrder(provider.loadSpaces())
         applyLabels(to: &loaded)
         applyAppIconHints(to: &loaded)
+        applyFrontmostAppOverride(to: &loaded, reason: "switch")
 
         let target = loaded.first(where: { $0.key == requestedSpace.key }) ?? requestedSpace
         let current = loaded.first(where: { $0.isCurrent })
