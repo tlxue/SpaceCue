@@ -60,3 +60,7 @@ open -n -F "$HOME/Applications/SpaceCue.app"
 - Full-screen Spaces such as Dia use macOS keyboard Space transitions instead of the private switch API. Grant Accessibility permission to `$HOME/Applications/SpaceCue.app` so this path can post `Control + Left/Right`.
 - If the private switch API fails, SpaceCue falls back to sending macOS keyboard shortcuts. Enable Mission Control's desktop shortcuts in System Settings and grant Accessibility permission.
 - Local code-signing material is generated outside the repository by default. The repo-local `signing/` directory is ignored by git and should not be committed.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
