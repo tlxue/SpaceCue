@@ -1,0 +1,12 @@
+build/
+signing/
+
+.swift-cache/
+.DS_Store
+
+*.app
+*.dSYM
+*.xcuserstate
+DerivedData/
+
+*.log
