@@ -329,11 +329,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         var loaded = normalizeCurrentSpaceOrder(provider.loadSpaces())
         applyLabels(to: &loaded)
         applyAppIconHints(to: &loaded)
+        let rawCurrent = loaded.first(where: { $0.isCurrent })
         applyFrontmostAppOverride(to: &loaded, reason: "switch")
 
         let target = loaded.first(where: { $0.key == requestedSpace.key }) ?? requestedSpace
         let current = loaded.first(where: { $0.isCurrent })
         let activeKey = current?.key
+
+        if let current,
+           frontmostSpaceOverrideKey == current.key,
+           current.key != target.key {
+            SpaceCueLog.write(
+                "switch using frontmost override current=\(current.ordinal) target=\(target.ordinal) renderedTarget=\(requestedSpace.ordinal)"
+            )
+            performFrontmostOverrideSwitch(
+                to: target,
+                current: current,
+                rawCurrent: rawCurrent,
+                renderedTargetOrdinal: requestedSpace.ordinal
+            )
+            return
+        }
 
         guard activeKey != target.key else {
             if !requestedSpace.isCurrent {
@@ -355,6 +371,68 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         switchToManagedSpace(target, attempt: 1)
+    }
+
+    private func performFrontmostOverrideSwitch(
+        to target: SpaceInfo,
+        current: SpaceInfo,
+        rawCurrent: SpaceInfo?,
+        renderedTargetOrdinal: Int
+    ) {
+        if KeyboardFallback.isAccessibilityTrusted {
+            performKeyboardSpaceSwitch(to: target, current: current, reason: "frontmost-override")
+            return
+        }
+
+        if rawCurrent?.key == target.key {
+            performFrontmostOverridePrivateRealignmentSwitch(
+                to: target,
+                current: current,
+                renderedTargetOrdinal: renderedTargetOrdinal
+            )
+            return
+        }
+
+        SpaceCueLog.write(
+            "switch frontmost override private direct target=\(target.ordinal) renderedTarget=\(renderedTargetOrdinal) rawCurrent=\(rawCurrent?.ordinal.description ?? "nil")"
+        )
+        switchToManagedSpace(target, attempt: 1)
+    }
+
+    private func performFrontmostOverridePrivateRealignmentSwitch(
+        to target: SpaceInfo,
+        current: SpaceInfo,
+        renderedTargetOrdinal: Int
+    ) {
+        if Date() < managedSwitchBusyUntil {
+            queuedManagedSwitch = target
+            let delay = max(0.06, managedSwitchBusyUntil.timeIntervalSinceNow + 0.03)
+            SpaceCueLog.write("switch frontmost override queued ordinal=\(target.ordinal) delay=\(String(format: "%.2f", delay))")
+            scheduleQueuedManagedSwitch(after: delay)
+            return
+        }
+
+        managedSwitchBusyUntil = Date().addingTimeInterval(0.9)
+        pendingManagedSwitchKey = target.key
+
+        let didAlign = provider.switchTo(current)
+        SpaceCueLog.write(
+            "switch frontmost override realign result=\(didAlign) current=\(current.ordinal) target=\(target.ordinal) renderedTarget=\(renderedTargetOrdinal)"
+        )
+        reassertWidget(reason: "frontmost-override-\(target.ordinal)-align")
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.16) { [weak self] in
+            guard let self else {
+                return
+            }
+
+            let didSwitch = self.provider.switchTo(target)
+            SpaceCueLog.write("switch frontmost override result=\(didSwitch) ordinal=\(target.ordinal)")
+            self.scheduleRefresh(after: 0.18, reason: "frontmost-override-\(target.ordinal)")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.48) { [weak self] in
+                self?.verifyManagedSpaceSwitch(target: target, attempt: 1, didSwitch: didSwitch)
+            }
+        }
     }
 
     private func switchToDesktop(_ space: SpaceInfo) {
@@ -507,8 +585,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
-        let actualSpaces = provider.loadSpaces()
-        let actualCurrent = actualSpaces.first(where: { $0.isCurrent }) ?? current
+        let actualSpaces = normalizeCurrentSpaceOrder(provider.loadSpaces())
+        let rawCurrent = actualSpaces.first(where: { $0.isCurrent })
+        let actualCurrent: SpaceInfo?
+        if let current,
+           current.key == frontmostSpaceOverrideKey,
+           actualSpaces.contains(where: { $0.key == current.key }) {
+            actualCurrent = actualSpaces.first(where: { $0.key == current.key }) ?? current
+        } else {
+            actualCurrent = rawCurrent ?? current
+        }
         let actualTarget = actualSpaces.first(where: { $0.key == target.key }) ?? target
 
         guard let actualCurrent else {
