@@ -352,7 +352,7 @@ private final class SpaceButton: NSButton {
         self.space = space
         super.init(frame: .zero)
         title = ""
-        toolTip = "Switch to \(space.label): ⌘ \(space.ordinal)"
+        toolTip = "Switch to \(space.label): ⌥ \(space.ordinal)"
         setButtonType(.momentaryChange)
         isBordered = false
         bezelStyle = .regularSquare
@@ -470,7 +470,7 @@ private final class SpaceButton: NSButton {
         nameLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
         nameLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
-        shortcutLabel.stringValue = "⌘ \(space.ordinal)"
+        shortcutLabel.stringValue = "⌥ \(space.ordinal)"
         shortcutLabel.font = NSFont.systemFont(ofSize: 9.5, weight: .medium)
         shortcutLabel.textColor = shortcutTextColor(for: space)
         shortcutLabel.alignment = .right

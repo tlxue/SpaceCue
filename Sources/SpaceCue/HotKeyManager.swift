@@ -37,6 +37,7 @@ final class HotKeyManager {
                 }
 
                 let manager = Unmanaged<HotKeyManager>.fromOpaque(userData).takeUnretainedValue()
+                SpaceCueLog.write("hotkey pressed ordinal=\(hotKeyID.id) source=carbon")
                 manager.onPressed?(Int(hotKeyID.id))
                 return noErr
             },
@@ -54,18 +55,38 @@ final class HotKeyManager {
 
             var ref: EventHotKeyRef?
             let hotKeyID = EventHotKeyID(signature: signature, id: UInt32(ordinal))
-            let modifiers = UInt32(cmdKey)
-            let status = RegisterEventHotKey(
+            let modifiers = UInt32(optionKey)
+            var usedExclusive = true
+            var status = RegisterEventHotKey(
                 UInt32(keyCode),
                 modifiers,
                 hotKeyID,
                 GetEventDispatcherTarget(),
-                0,
+                UInt32(kEventHotKeyExclusive),
                 &ref
             )
 
             if status == noErr {
                 refs.append(ref)
+                SpaceCueLog.write("hotkey registered ordinal=\(ordinal) modifiers=option exclusive=\(usedExclusive)")
+            } else {
+                SpaceCueLog.write("hotkey exclusive registration failed ordinal=\(ordinal) status=\(status); retrying nonexclusive")
+                usedExclusive = false
+                status = RegisterEventHotKey(
+                    UInt32(keyCode),
+                    modifiers,
+                    hotKeyID,
+                    GetEventDispatcherTarget(),
+                    0,
+                    &ref
+                )
+
+                if status == noErr {
+                    refs.append(ref)
+                    SpaceCueLog.write("hotkey registered ordinal=\(ordinal) modifiers=option exclusive=\(usedExclusive)")
+                } else {
+                    SpaceCueLog.write("hotkey registration failed ordinal=\(ordinal) status=\(status)")
+                }
             }
         }
     }

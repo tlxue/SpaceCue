@@ -116,7 +116,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         status.isEnabled = false
         menu.addItem(status)
 
-        let hotkeys = NSMenuItem(title: "Hotkeys: ⌘ 1 ... ⌘ 9", action: nil, keyEquivalent: "")
+        let hotkeys = NSMenuItem(title: "Hotkeys: ⌥ 1 ... ⌥ 9", action: nil, keyEquivalent: "")
         hotkeys.isEnabled = false
         menu.addItem(hotkeys)
 
@@ -242,6 +242,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
+        if let currentIndex = loaded.firstIndex(where: { $0.isCurrent }),
+           loaded[currentIndex].type == 4,
+           let visible = frontmostManagedSpace(in: loaded),
+           visible.key != loaded[currentIndex].key,
+           let targetIndex = loaded.firstIndex(where: { $0.key == visible.key }) {
+            frontmostSpaceOverrideKey = visible.key
+            loaded[currentIndex].isCurrent = false
+            loaded[targetIndex].isCurrent = true
+            SpaceCueLog.write(
+                "active visible override reason=\(reason) from=\(loaded[currentIndex].ordinal):\(loaded[currentIndex].label) to=\(loaded[targetIndex].ordinal):\(loaded[targetIndex].label) frontmost=\(context.phrase)"
+            )
+            return
+        }
+
         if reason.hasPrefix("app-activate:"),
            let targetIndex = loaded.indices.first(where: { loaded[$0].type == 4 && space(loaded[$0], matches: context) }) {
             frontmostSpaceOverrideKey = loaded[targetIndex].key
@@ -265,6 +279,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         SpaceCueLog.write(
             "active override reason=\(reason) from=\(loaded[currentIndex].ordinal):\(loaded[currentIndex].label) to=\(loaded[targetIndex].ordinal):\(loaded[targetIndex].label) frontmost=\(context.phrase)"
         )
+    }
+
+    private func frontmostManagedSpace(in loaded: [SpaceInfo]) -> SpaceInfo? {
+        guard let context = WorkspaceIntrospector.currentAppContext(excludingBundleID: Bundle.main.bundleIdentifier) else {
+            return nil
+        }
+
+        let matches = loaded.filter { $0.type == 4 && space($0, matches: context) }
+        guard let match = matches.first else {
+            return nil
+        }
+
+        if matches.count > 1 {
+            let ordinals = matches.map { $0.ordinal.description }.joined(separator: ",")
+            SpaceCueLog.write("frontmost managed ambiguous frontmost=\(context.phrase) matches=\(ordinals)")
+            return nil
+        }
+
+        return match
     }
 
     private func space(_ space: SpaceInfo, matches context: WorkspaceAppContext) -> Bool {
@@ -330,26 +363,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         applyLabels(to: &loaded)
         applyAppIconHints(to: &loaded)
         let rawCurrent = loaded.first(where: { $0.isCurrent })
-        applyFrontmostAppOverride(to: &loaded, reason: "switch")
 
         let target = loaded.first(where: { $0.key == requestedSpace.key }) ?? requestedSpace
-        let current = loaded.first(where: { $0.isCurrent })
-        let activeKey = current?.key
-
-        if let current,
-           frontmostSpaceOverrideKey == current.key,
-           current.key != target.key {
+        cancelQueuedManagedSwitch(reason: "request-\(target.ordinal)")
+        let visibleCurrent = frontmostManagedSpace(in: loaded)
+        if let rawCurrent,
+           let visibleCurrent,
+           rawCurrent.key != visibleCurrent.key {
             SpaceCueLog.write(
-                "switch using frontmost override current=\(current.ordinal) target=\(target.ordinal) renderedTarget=\(requestedSpace.ordinal)"
+                "switch visible/private mismatch raw=\(rawCurrent.ordinal) visible=\(visibleCurrent.ordinal) target=\(target.ordinal) renderedTarget=\(requestedSpace.ordinal)"
             )
-            performFrontmostOverrideSwitch(
+
+            if target.key == visibleCurrent.key {
+                let didAlign = provider.switchTo(visibleCurrent)
+                SpaceCueLog.write(
+                    "switch aligned private to visible result=\(didAlign) raw=\(rawCurrent.ordinal) visible=\(visibleCurrent.ordinal) renderedTarget=\(requestedSpace.ordinal)"
+                )
+                scheduleRefresh(after: 0.18, reason: "switch-visible-\(visibleCurrent.ordinal)-align")
+                return
+            }
+
+            performVisibleCurrentSwitch(
                 to: target,
-                current: current,
-                rawCurrent: rawCurrent,
+                current: visibleCurrent,
+                reason: "visible-private-mismatch raw=\(rawCurrent.ordinal)",
                 renderedTargetOrdinal: requestedSpace.ordinal
             )
             return
         }
+
+        let current = rawCurrent
+        let activeKey = current?.key
 
         guard activeKey != target.key else {
             if !requestedSpace.isCurrent {
@@ -373,30 +417,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         switchToManagedSpace(target, attempt: 1)
     }
 
-    private func performFrontmostOverrideSwitch(
+    private func performVisibleCurrentSwitch(
         to target: SpaceInfo,
         current: SpaceInfo,
-        rawCurrent: SpaceInfo?,
+        reason: String,
         renderedTargetOrdinal: Int
     ) {
-        if KeyboardFallback.isAccessibilityTrusted {
-            performKeyboardSpaceSwitch(to: target, current: current, reason: "frontmost-override")
-            return
-        }
+        frontmostSpaceOverrideKey = current.key
 
-        if rawCurrent?.key == target.key {
-            performFrontmostOverridePrivateRealignmentSwitch(
-                to: target,
-                current: current,
-                renderedTargetOrdinal: renderedTargetOrdinal
+        if KeyboardFallback.isAccessibilityTrusted {
+            SpaceCueLog.write(
+                "switch visible-current keyboard target=\(target.ordinal) current=\(current.ordinal) renderedTarget=\(renderedTargetOrdinal) reason=\(reason)"
             )
+            performKeyboardSpaceSwitch(to: target, current: current, reason: reason)
             return
         }
 
         SpaceCueLog.write(
-            "switch frontmost override private direct target=\(target.ordinal) renderedTarget=\(renderedTargetOrdinal) rawCurrent=\(rawCurrent?.ordinal.description ?? "nil")"
+            "switch visible-current private realign target=\(target.ordinal) current=\(current.ordinal) renderedTarget=\(renderedTargetOrdinal) reason=\(reason)"
         )
-        switchToManagedSpace(target, attempt: 1)
+        performFrontmostOverridePrivateRealignmentSwitch(
+            to: target,
+            current: current,
+            renderedTargetOrdinal: renderedTargetOrdinal
+        )
     }
 
     private func performFrontmostOverridePrivateRealignmentSwitch(
@@ -659,8 +703,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
-        let currentKey = provider.loadSpaces().first(where: { $0.isCurrent })?.key
+        var loaded = normalizeCurrentSpaceOrder(provider.loadSpaces())
+        applyLabels(to: &loaded)
+        applyAppIconHints(to: &loaded)
+        let current = loaded.first(where: { $0.isCurrent })
+        let currentKey = current?.key
+        let actualTarget = loaded.first(where: { $0.key == target.key }) ?? target
+
         if currentKey == target.key {
+            if actualTarget.type == 4,
+               let visibleCurrent = frontmostManagedSpace(in: loaded),
+               visibleCurrent.key != target.key {
+                SpaceCueLog.write(
+                    "switch private reached target but frontmost mismatch target=\(actualTarget.ordinal) visible=\(visibleCurrent.ordinal) attempt=\(attempt)"
+                )
+
+                if attempt < 3 {
+                    performVisibleCurrentSwitch(
+                        to: actualTarget,
+                        current: visibleCurrent,
+                        reason: "managed-frontmost-missed attempt=\(attempt)",
+                        renderedTargetOrdinal: target.ordinal
+                    )
+                    return
+                }
+
+                pendingManagedSwitchKey = nil
+                performSpaceKeyboardFallback(to: actualTarget, reason: "managed-frontmost-missed")
+                flushQueuedManagedSwitch(after: 0.2)
+                return
+            }
+
             pendingManagedSwitchKey = nil
             refreshSpaces(mode: .immediate, reason: "switch-\(target.ordinal)-verified")
             flushQueuedManagedSwitch(after: 0.08)
@@ -700,6 +773,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         queuedManagedFlushWorkItem = item
         DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: item)
+    }
+
+    private func cancelQueuedManagedSwitch(reason: String) {
+        guard let queuedManagedSwitch else {
+            return
+        }
+
+        SpaceCueLog.write("switch queued cancelled reason=\(reason) ordinal=\(queuedManagedSwitch.ordinal)")
+        self.queuedManagedSwitch = nil
+        queuedManagedFlushWorkItem?.cancel()
+        queuedManagedFlushWorkItem = nil
     }
 
     private func flushQueuedManagedSwitch(after delay: TimeInterval = 0) {
